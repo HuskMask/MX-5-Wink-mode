@@ -1,0 +1,1102 @@
+<!DOCTYPE html>
+<html lang="da">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MX-5 NA — Headlight Controller</title>
+<style>
+  /* ============================================================
+     FONTS — Imported from Google Fonts
+     Bebas Neue: Headings / logo
+     Share Tech Mono: Monospace status display
+     Rajdhani: Body text and buttons
+  ============================================================ */
+  @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Share+Tech+Mono&family=Rajdhani:wght@300;500;700&display=swap');
+
+  /* ============================================================
+     CSS VARIABLES — Color palette and theme
+  ============================================================ */
+  :root {
+    --bg: #0a0a0c;               /* Background color – near black */
+    --panel: #111116;            /* Panel color – dark grey */
+    --border: #1e1e2a;           /* Border color */
+    --amber: #cc1010;            /* Primary color – classic red */
+    --amber-glow: rgba(204,16,16,0.15); /* Red glow effect */
+    --red: #ff3c3c;              /* Error/warning color */
+    --green: #39ff6a;            /* Active/connected color */
+    --blue: #00c8ff;             /* Connect button color */
+    --text: #c8c8d8;             /* Primary text color */
+    --muted: #555570;            /* Muted text color */
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  /* ============================================================
+     BODY — Base layout, centered content
+  ============================================================ */
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Rajdhani', sans-serif;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    overflow-x: hidden;
+  }
+
+  /* Scanline overlay (CRT look) – layered on top of all content */
+  body::before {
+    content: '';
+    position: fixed; inset: 0;
+    background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.08) 2px, rgba(0,0,0,0.08) 4px);
+    pointer-events: none; z-index: 999;
+  }
+
+  /* Noise/grain filter for retro aesthetic */
+  body::after {
+    content: '';
+    position: fixed; inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E");
+    pointer-events: none; z-index: 998; opacity: 0.4;
+  }
+
+  /* ============================================================
+     BLUETOOTH / SERIAL STATUS BAR — Connection strip at the top
+  ============================================================ */
+  .bt-bar {
+    width: 100%; max-width: 860px; margin-bottom: 14px;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 4px;
+    padding: 10px 16px; display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  }
+
+  /* Status indicator dot – changes color based on connection state */
+  .bt-status-dot { width: 8px; height: 8px; border-radius: 50%; background: #333; flex-shrink: 0; transition: all 0.3s; }
+  .bt-status-dot.connecting { background: var(--amber); box-shadow: 0 0 8px var(--amber); animation: pulse 1s infinite; }
+  .bt-status-dot.connected  { background: var(--green);  box-shadow: 0 0 8px var(--green); }
+  .bt-status-dot.error      { background: var(--red);    box-shadow: 0 0 8px var(--red); }
+
+  .bt-status-text { font-family: 'Share Tech Mono', monospace; font-size: 10px; letter-spacing: 2px; color: var(--muted); flex: 1; }
+  .bt-status-text.connected { color: var(--green); }
+  .bt-status-text.error     { color: var(--red); }
+
+  /* Connect / Disconnect buttons */
+  .bt-btn {
+    background: transparent; border: 1px solid var(--border); color: var(--muted);
+    font-family: 'Rajdhani', sans-serif; font-weight: 700; font-size: 11px; letter-spacing: 2px; text-transform: uppercase;
+    padding: 6px 14px; cursor: pointer; border-radius: 3px; transition: all 0.2s; white-space: nowrap;
+  }
+  .bt-btn.connect { border-color: var(--blue); color: var(--blue); }
+  .bt-btn.connect:hover { background: rgba(0,200,255,0.08); box-shadow: 0 0 12px rgba(0,200,255,0.2); }
+  .bt-btn.disconnect { border-color: var(--red); color: var(--red); }
+  .bt-btn.disconnect:hover { background: rgba(255,60,60,0.08); }
+
+  .bt-device-name { font-family: 'Share Tech Mono', monospace; font-size: 10px; color: var(--amber); letter-spacing: 1px; }
+
+  /* TX indicator – flashes on data transmission */
+  .bt-tx { font-family: 'Share Tech Mono', monospace; font-size: 9px; letter-spacing: 2px; color: #333; transition: color 0.1s; }
+  .bt-tx.flash { color: var(--blue); }
+
+  /* Warning shown when Web Serial API is not supported */
+  .no-bt-warn {
+    background: rgba(255,60,60,0.06); border: 1px solid rgba(255,60,60,0.2); border-radius: 3px;
+    padding: 8px 14px; font-family: 'Share Tech Mono', monospace; font-size: 10px;
+    color: rgba(255,60,60,0.7); letter-spacing: 1px; margin-bottom: 10px; display: none;
+    width: 100%; max-width: 860px;
+  }
+
+  /* ============================================================
+     HEADER — Logo and subtitle
+  ============================================================ */
+  .header { text-align: center; margin-bottom: 32px; }
+  .header-top { display: flex; align-items: center; justify-content: center; gap: 16px; margin-bottom: 4px; }
+
+  /* Decorative lines flanking the logo */
+  .logo-line { width: 60px; height: 1px; background: linear-gradient(90deg, transparent, var(--amber)); }
+  .logo-line.right { background: linear-gradient(90deg, var(--amber), transparent); }
+
+  h1 { font-family: 'Bebas Neue', sans-serif; font-size: clamp(28px,6vw,52px); letter-spacing: 8px; color: var(--amber); text-shadow: 0 0 30px var(--amber-glow), 0 0 60px rgba(255,184,0,0.1); }
+  .subtitle { font-family: 'Share Tech Mono', monospace; font-size: 11px; color: var(--muted); letter-spacing: 4px; text-transform: uppercase; }
+
+  .main-container { width: 100%; max-width: 860px; display: grid; grid-template-columns: 1fr; gap: 16px; }
+
+  /* ============================================================
+     CAR VISUALIZATION — Live preview of headlight state
+  ============================================================ */
+  .car-viz {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 4px;
+    padding: 28px 20px 20px; display: flex; flex-direction: column; align-items: center; position: relative; overflow: hidden;
+  }
+  .car-viz::before {
+    content: 'LIVE PREVIEW'; position: absolute; top: 10px; right: 14px;
+    font-family: 'Share Tech Mono', monospace; font-size: 9px; letter-spacing: 3px; color: var(--muted);
+  }
+
+  .car-front { position: relative; width: 320px; height: 160px; }
+
+  /* Individual headlights – can rotate (pop-up effect) and illuminate */
+  .headlight {
+    position: absolute; width: 72px; height: 48px;
+    border: 2px solid #222; border-radius: 6px 6px 2px 2px; overflow: hidden;
+    transition: transform 0.4s cubic-bezier(0.34,1.56,0.64,1); /* Spring animation */
+  }
+  .headlight.left  { left: 28px;  top: 40px; }
+  .headlight.right { right: 28px; top: 40px; }
+
+  .headlight-body {
+    width: 100%; height: 100%; background: linear-gradient(180deg,#1a1a1a 0%,#111 100%);
+    display: flex; align-items: center; justify-content: center; position: relative; transition: background 0.3s;
+  }
+  .headlight-inner { width: 44px; height: 28px; border-radius: 4px 4px 1px 1px; background: #0d0d0d; position: relative; overflow: hidden; transition: all 0.3s; }
+  .headlight-lens { position: absolute; inset: 0; background: radial-gradient(ellipse at 50% 30%,rgba(255,200,80,0) 0%,rgba(255,150,0,0) 100%); border-radius: 4px 4px 1px 1px; transition: background 1s; }
+
+  /* Classes applied when the light is switched on */
+  .headlight.on .headlight-inner { background: #ffcc44; box-shadow: 0 0 20px rgba(255,200,60,0.9),0 0 40px rgba(255,160,0,0.5); }
+  .headlight.on .headlight-body  { background: linear-gradient(180deg,#2a2000 0%,#1a1400 100%); }
+  .headlight.on .headlight-lens  { background: radial-gradient(ellipse at 50% 30%,rgba(255,220,100,0.8) 0%,rgba(255,160,0,0.2) 70%,transparent 100%); }
+
+  /* Closed = rotated 85 degrees (hidden), Open = 0 degrees (visible) */
+  .headlight.closed { transform: rotateX(85deg); transform-origin: bottom center; }
+  .headlight.open   { transform: rotateX(0deg);  transform-origin: bottom center; }
+
+  /* Light beam shown when the headlight is on */
+  .beam { position: absolute; bottom: -80px; width: 0; height: 0; opacity: 0; transition: opacity 0.3s; pointer-events: none; }
+  .headlight.left  .beam { left: 50%;  transform: translateX(-50%); border-left: 60px solid transparent; border-right: 60px solid transparent; border-top: 90px solid rgba(255,200,50,0.08); }
+  .headlight.right .beam { right: 50%; transform: translateX(50%);  border-left: 60px solid transparent; border-right: 60px solid transparent; border-top: 90px solid rgba(255,200,50,0.08); }
+  .headlight.on .beam { opacity: 1; }
+
+  .car-body-svg { width: 320px; height: 120px; margin-top: -10px; }
+
+  /* Ground glow shown when any light is active */
+  .ground-glow { position: absolute; bottom: 16px; width: 280px; height: 16px; background: radial-gradient(ellipse,rgba(255,184,0,0.0) 0%,transparent 70%); border-radius: 50%; transition: background 0.5s; }
+
+  /* ============================================================
+     CONTROL PANELS — Buttons and settings
+  ============================================================ */
+  .controls-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 4px; padding: 20px; position: relative; }
+  .panel-label { font-family: 'Share Tech Mono', monospace; font-size: 9px; letter-spacing: 3px; color: var(--muted); text-transform: uppercase; margin-bottom: 16px; border-bottom: 1px solid var(--border); padding-bottom: 10px; }
+
+  /* Grid for quick control buttons */
+  .btn-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+  .btn {
+    background: transparent; border: 1px solid var(--border); color: var(--text);
+    font-family: 'Rajdhani', sans-serif; font-weight: 700; font-size: 13px; letter-spacing: 2px; text-transform: uppercase;
+    padding: 12px 8px; cursor: pointer; border-radius: 3px; transition: all 0.2s; position: relative; overflow: hidden;
+  }
+  /* Hover overlay */
+  .btn::before { content: ''; position: absolute; inset: 0; background: var(--amber); opacity: 0; transition: opacity 0.2s; }
+  .btn:hover::before { opacity: 0.08; }
+
+  /* Animation mode buttons with active indicator dot */
+  .mode-btn {
+    width: 100%; background: transparent; border: 1px solid var(--border); color: var(--muted);
+    font-family: 'Rajdhani', sans-serif; font-weight: 500; font-size: 12px; letter-spacing: 2px; text-transform: uppercase;
+    padding: 10px 14px; cursor: pointer; border-radius: 3px; transition: all 0.2s;
+    text-align: left; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center;
+  }
+  .mode-btn:last-child { margin-bottom: 0; }
+  .mode-btn .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--border); transition: all 0.2s; }
+  .mode-btn:hover { color: var(--text); border-color: #333; }
+  .mode-btn.active { border-color: var(--amber); color: var(--amber); background: rgba(255,184,0,0.04); }
+  .mode-btn.active .dot { background: var(--amber); box-shadow: 0 0 8px var(--amber); }
+
+  /* Sliders for speed and easing */
+  .slider-wrap { margin-top: 8px; }
+  .slider-label { font-size: 11px; color: var(--muted); letter-spacing: 2px; text-transform: uppercase; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; }
+  .slider-value { font-family: 'Share Tech Mono', monospace; color: var(--amber); font-size: 13px; }
+  input[type=range] { -webkit-appearance: none; width: 100%; height: 2px; background: var(--border); outline: none; border-radius: 1px; margin-bottom: 16px; }
+  input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%; background: var(--amber); cursor: pointer; box-shadow: 0 0 10px rgba(255,184,0,0.5); border: 2px solid #0a0a0c; }
+
+  /* Status bar at the bottom */
+  .status-bar {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 4px;
+    padding: 12px 20px; display: flex; align-items: center; gap: 24px;
+    font-family: 'Share Tech Mono', monospace; font-size: 11px; color: var(--muted); flex-wrap: wrap;
+  }
+  .status-item { display: flex; align-items: center; gap: 8px; }
+  .status-indicator { width: 6px; height: 6px; border-radius: 50%; background: var(--border); }
+  .status-indicator.online { background: var(--green); box-shadow: 0 0 8px var(--green); animation: pulse 2s infinite; }
+  .status-val { color: var(--text); }
+
+  /* Individual left/right buttons */
+  .individual-btns { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .ind-col { display: flex; flex-direction: column; gap: 6px; }
+  .ind-label { font-size: 10px; letter-spacing: 2px; color: var(--muted); text-align: center; margin-bottom: 4px; }
+  .btn-sm {
+    background: transparent; border: 1px solid var(--border); color: var(--muted);
+    font-family: 'Rajdhani', sans-serif; font-weight: 700; font-size: 11px; letter-spacing: 1px; text-transform: uppercase;
+    padding: 8px; cursor: pointer; border-radius: 3px; transition: all 0.2s; text-align: center;
+  }
+  .btn-sm:hover { color: var(--text); border-color: #333; }
+  .btn-sm.active-green { border-color: var(--green); color: var(--green); box-shadow: 0 0 10px rgba(57,255,106,0.15); }
+
+  /* Decorative corner markers on panels */
+  .corner-tl, .corner-br { position: absolute; width: 12px; height: 12px; }
+  .corner-tl { top: 0; left: 0; border-top: 2px solid var(--amber); border-left: 2px solid var(--amber); opacity: 0.5; }
+  .corner-br { bottom: 0; right: 0; border-bottom: 2px solid var(--amber); border-right: 2px solid var(--amber); opacity: 0.5; }
+
+  /* Pulse animation used by status indicators */
+  @keyframes pulse { 0%,100%{opacity:1}50%{opacity:0.4} }
+
+  /* ============================================================
+     SLEEPY EYES MODAL — Configuration window
+  ============================================================ */
+  .modal-overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.85); z-index: 1000;
+    display: flex; align-items: center; justify-content: center;
+    opacity: 0; pointer-events: none; transition: opacity 0.3s; backdrop-filter: blur(4px);
+  }
+  .modal-overlay.visible { opacity: 1; pointer-events: all; }
+  .modal {
+    background: #0d0d10; border: 1px solid var(--amber); border-radius: 4px;
+    width: 100%; max-width: 520px; margin: 16px;
+    box-shadow: 0 0 60px rgba(255,184,0,0.15); overflow: hidden;
+    transform: translateY(16px); transition: transform 0.3s cubic-bezier(0.34,1.56,0.64,1);
+  }
+  .modal-overlay.visible .modal { transform: translateY(0); }
+  .modal-header { background: rgba(255,184,0,0.06); border-bottom: 1px solid rgba(255,184,0,0.2); padding: 16px 20px; display: flex; align-items: center; justify-content: space-between; }
+  .modal-title { font-family: 'Bebas Neue', sans-serif; font-size: 20px; letter-spacing: 4px; color: var(--amber); }
+  .modal-subtitle { font-family: 'Share Tech Mono', monospace; font-size: 9px; letter-spacing: 3px; color: var(--muted); margin-top: 2px; }
+  .modal-close { background: transparent; border: 1px solid #333; color: var(--muted); font-family: 'Rajdhani', sans-serif; font-size: 12px; letter-spacing: 2px; padding: 6px 12px; cursor: pointer; border-radius: 3px; transition: all 0.2s; text-transform: uppercase; }
+  .modal-close:hover { border-color: var(--red); color: var(--red); }
+  .modal-body { padding: 24px 20px; }
+
+  /* Mini car preview inside the modal */
+  .modal-preview { display: flex; justify-content: center; margin-bottom: 24px; padding: 20px; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; position: relative; }
+  .modal-preview::before { content: 'PREVIEW'; position: absolute; top: 8px; right: 10px; font-family: 'Share Tech Mono', monospace; font-size: 8px; letter-spacing: 3px; color: var(--muted); }
+  .mini-car { position: relative; width: 220px; height: 100px; }
+  .mini-hl { position: absolute; width: 52px; height: 34px; border: 1px solid #333; border-radius: 4px 4px 2px 2px; overflow: hidden; transform-origin: bottom center; transition: transform 0.4s cubic-bezier(0.34,1.56,0.64,1); }
+  .mini-hl.left-hl  { left: 14px;  top: 28px; }
+  .mini-hl.right-hl { right: 14px; top: 28px; }
+  .mini-hl-body { width: 100%; height: 100%; background: linear-gradient(180deg,#1a1400 0%,#111 100%); display: flex; align-items: center; justify-content: center; }
+  .mini-hl-inner { width: 32px; height: 20px; border-radius: 3px 3px 1px 1px; background: #ffcc44; box-shadow: 0 0 12px rgba(255,200,60,0.8); }
+
+  /* Dominant side selector buttons */
+  .dominant-selector { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 20px; }
+  .dom-btn { background: transparent; border: 1px solid var(--border); color: var(--muted); font-family: 'Rajdhani', sans-serif; font-weight: 700; font-size: 13px; letter-spacing: 2px; text-transform: uppercase; padding: 12px; cursor: pointer; border-radius: 3px; transition: all 0.2s; text-align: center; }
+  .dom-btn:hover { border-color: #444; color: var(--text); }
+  .dom-btn.active { border-color: var(--amber); color: var(--amber); background: rgba(255,184,0,0.05); box-shadow: 0 0 16px rgba(255,184,0,0.15); }
+  .dom-btn .dom-icon { font-size: 18px; display: block; margin-bottom: 4px; }
+
+  .modal-section-label { font-family: 'Share Tech Mono', monospace; font-size: 9px; letter-spacing: 3px; color: var(--muted); text-transform: uppercase; margin-bottom: 12px; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+
+  /* Slider rows for opening angle per side */
+  .eye-slider-row { display: flex; align-items: center; gap: 14px; margin-bottom: 12px; }
+  .eye-side-label { font-family: 'Share Tech Mono', monospace; font-size: 10px; letter-spacing: 2px; color: var(--muted); width: 52px; flex-shrink: 0; }
+  .eye-side-label span { display: block; font-size: 8px; color: #333; margin-top: 2px; }
+  .eye-slider-wrap { flex: 1; }
+  .eye-pct { font-family: 'Share Tech Mono', monospace; font-size: 12px; color: var(--amber); width: 38px; text-align: right; flex-shrink: 0; }
+
+  /* 'full' = dominant side (solid amber), 'half' = non-dominant (semi-transparent) */
+  input[type=range].eye-range { -webkit-appearance: none; width: 100%; height: 3px; border-radius: 2px; outline: none; }
+  input[type=range].eye-range.full { background: var(--amber); }
+  input[type=range].eye-range.half { background: rgba(255,184,0,0.5); }
+  input[type=range].eye-range::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%; background: var(--amber); cursor: pointer; box-shadow: 0 0 10px rgba(255,184,0,0.6); border: 2px solid #0a0a0c; }
+
+  /* Apply button inside the modal */
+  .modal-apply { width: 100%; background: rgba(255,184,0,0.08); border: 1px solid var(--amber); color: var(--amber); font-family: 'Rajdhani', sans-serif; font-weight: 700; font-size: 14px; letter-spacing: 3px; text-transform: uppercase; padding: 14px; cursor: pointer; border-radius: 3px; transition: all 0.2s; margin-top: 8px; }
+  .modal-apply:hover { background: rgba(255,184,0,0.15); box-shadow: 0 0 20px rgba(255,184,0,0.2); }
+
+  /* ============================================================
+     RESPONSIVE DESIGN — Mobile / tablet adjustments
+  ============================================================ */
+  @media (max-width: 600px) {
+    .controls-grid { grid-template-columns: 1fr; }
+    .car-front { width: 260px; }
+    .car-body-svg { width: 260px; }
+    .headlight.left  { left: 14px; }
+    .headlight.right { right: 14px; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ============================================================
+     HEADER — Logo and subtitle
+============================================================ -->
+<div class="header">
+  <div class="header-top">
+    <div class="logo-line"></div>
+    <h1>MX-5</h1>
+    <div class="logo-line right"></div>
+  </div>
+  <div class="subtitle">Pop-up Headlight Controller — NA Series</div>
+</div>
+
+<!-- ============================================================
+     BLUETOOTH / SERIAL CONNECTION BAR
+     Displays connection status and TX activity
+============================================================ -->
+<div class="bt-bar">
+  <div class="bt-status-dot" id="bt-dot"></div>
+  <div class="bt-status-text" id="bt-text">IKKE FORBUNDET</div>
+  <span class="bt-device-name" id="bt-device-name" style="display:none"></span>
+  <span class="bt-tx" id="bt-tx">TX &#9675;</span>
+  <button class="bt-btn connect" id="bt-connect-btn" onclick="btConnect()">&#9685; Forbind</button>
+  <button class="bt-btn disconnect" id="bt-disconnect-btn" style="display:none" onclick="btDisconnect()">&#x2715; Afbryd</button>
+</div>
+<!-- Warning shown only in browsers that don't support Web Serial API -->
+<div class="no-bt-warn" id="no-bt-warn"></div>
+
+<!-- ============================================================
+     MAIN CONTAINER — Holds all panels
+============================================================ -->
+<div class="main-container">
+
+  <!-- CAR VISUALIZATION: Live 3D preview of headlight state -->
+  <div class="car-viz">
+    <div class="corner-tl"></div><div class="corner-br"></div>
+    <div class="car-front">
+
+      <!-- Left headlight – starts closed (pop-up retracted) -->
+      <div class="headlight left closed" id="hl-left">
+        <div class="headlight-body"><div class="headlight-inner"><div class="headlight-lens"></div></div></div>
+        <div class="beam"></div>
+      </div>
+
+      <!-- Right headlight – starts closed (pop-up retracted) -->
+      <div class="headlight right closed" id="hl-right">
+        <div class="headlight-body"><div class="headlight-inner"><div class="headlight-lens"></div></div></div>
+        <div class="beam"></div>
+      </div>
+
+      <!-- SVG car body (stylized MX-5 front viewed head-on) -->
+      <svg class="car-body-svg" viewBox="0 0 320 120" fill="none" xmlns="http://www.w3.org/2000/svg" style="position:absolute;top:60px;left:0">
+        <!-- Body shell -->
+        <path d="M20 100 L20 60 L50 40 L270 40 L300 60 L300 100 Z" fill="#111116" stroke="#1e1e2a" stroke-width="1.5"/>
+        <!-- Grille -->
+        <rect x="100" y="55" width="120" height="30" rx="3" fill="#0a0a0c" stroke="#222" stroke-width="1"/>
+        <!-- Grille slats -->
+        <line x1="130" y1="55" x2="130" y2="85" stroke="#1a1a1a" stroke-width="1"/>
+        <line x1="160" y1="55" x2="160" y2="85" stroke="#1a1a1a" stroke-width="1"/>
+        <line x1="190" y1="55" x2="190" y2="85" stroke="#1a1a1a" stroke-width="1"/>
+        <!-- Bumper -->
+        <rect x="50" y="90" width="220" height="8" rx="2" fill="#0d0d0d" stroke="#1a1a1a" stroke-width="1"/>
+        <!-- Hood line -->
+        <line x1="50" y1="40" x2="270" y2="40" stroke="#1e1e2a" stroke-width="2"/>
+        <!-- Mazda badge -->
+        <circle cx="160" cy="70" r="10" fill="#111" stroke="#2a2a2a" stroke-width="1.5"/>
+        <text x="160" y="74" text-anchor="middle" fill="#555" font-size="7" font-family="Rajdhani" font-weight="700">M</text>
+        <!-- Wheel arch / side markers -->
+        <rect x="60" y="88" width="28" height="8" rx="1" fill="#0d0d0d" stroke="#1a1a1a"/>
+        <rect x="232" y="88" width="28" height="8" rx="1" fill="#0d0d0d" stroke="#1a1a1a"/>
+      </svg>
+    </div>
+    <!-- Ground glow – visible when any light is active -->
+    <div class="ground-glow" id="ground-glow"></div>
+  </div>
+
+  <!-- CONTROL GRID: 2-column layout with control panels -->
+  <div class="controls-grid">
+
+    <!-- PANEL 1: Quick control and individual left/right control -->
+    <div class="panel">
+      <div class="panel-label">Quick Control</div>
+      <!-- Open/close all and lights on/off simultaneously -->
+      <div class="btn-grid">
+        <button class="btn" onclick="setAll('open')">&#9650; Aaben alt</button>
+        <button class="btn" onclick="setAll('close')">&#9660; Luk alt</button>
+        <button class="btn" onclick="setAll('on')">&#9685; Lys TIL</button>
+        <button class="btn" onclick="setAll('off')">&#9675; Lys FRA</button>
+      </div>
+      <!-- Individual control of left and right headlights separately -->
+      <div style="margin-top:14px">
+        <div class="panel-label" style="margin-bottom:8px">Individuel kontrol</div>
+        <div class="individual-btns">
+          <div class="ind-col">
+            <div class="ind-label">Venstre</div>
+            <button class="btn-sm" onclick="toggleOpen('left')"  id="ind-left-open">&#9650; Aaben</button>
+            <button class="btn-sm" onclick="toggleLight('left')" id="ind-left-light">&#9685; Lys</button>
+          </div>
+          <div class="ind-col">
+            <div class="ind-label">Hoejre</div>
+            <button class="btn-sm" onclick="toggleOpen('right')"  id="ind-right-open">&#9650; Aaben</button>
+            <button class="btn-sm" onclick="toggleLight('right')" id="ind-right-light">&#9685; Lys</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- PANEL 2: Animation modes -->
+    <div class="panel">
+      <div class="panel-label">Animationsmode</div>
+      <!-- Blink-alt: left and right take turns blinking -->
+      <button class="mode-btn" onclick="setMode('blink-alt')" id="mode-blink-alt">
+        &#9889; Alternerende blink <div class="dot"></div>
+      </button>
+      <!-- Wave: headlights open and close in sequence -->
+      <button class="mode-btn" onclick="setMode('wave')" id="mode-wave">
+        &#12316; Wave mode <div class="dot"></div>
+      </button>
+      <!-- Wink: random wave animation with variable pause between cycles -->
+      <button class="mode-btn" onclick="setMode('wink')" id="mode-wink">
+        &#128065; Blink mode <div class="dot"></div>
+      </button>
+      <!-- Sleepy Eyes: half-open headlights – EDIT button opens config modal without activating the mode -->
+      <button class="mode-btn" onclick="activateSleepyEyes()" id="mode-sleepy">
+        <span style="display:flex;align-items:center;width:100%">
+          <span>&#128564; Sleepy Eyes</span>
+          <span style="margin-left:auto;display:flex;align-items:center;gap:6px">
+            <span class="dot"></span>
+            <!-- EDIT opens the configuration modal without activating the mode -->
+            <span onclick="event.stopPropagation();openSleepyModal()" style="font-family:'Share Tech Mono',monospace;font-size:8px;letter-spacing:2px;color:#555;border:1px solid #2a2a2a;padding:3px 7px;border-radius:2px;cursor:pointer;" onmouseover="this.style.color='#ffb800';this.style.borderColor='rgba(255,184,0,0.4)'" onmouseout="this.style.color='#555';this.style.borderColor='#2a2a2a'">EDIT</span>
+          </span>
+        </span>
+      </button>
+      <!-- Stop: cancels all animations and resets to standby -->
+      <button class="mode-btn" style="border-color:#333;color:#555" onclick="stopMode()">
+        &#9632; Stop animation <div class="dot"></div>
+      </button>
+    </div>
+
+    <!-- PANEL 3: Speed and easing settings (spans both columns) -->
+    <div class="panel" style="grid-column:span 2">
+      <div class="panel-label">Indstillinger</div>
+      <div class="slider-wrap">
+        <!-- Animation speed: controls the interval between steps (ms) -->
+        <div class="slider-label"><span>Hastighed</span><span class="slider-value" id="speed-val">500ms</span></div>
+        <input type="range" min="100" max="2000" value="500" step="50" oninput="updateSpeed(this.value)">
+        <!-- Easing: CSS transition duration for the pop-up movement -->
+        <div class="slider-label"><span>Easing</span><span class="slider-value" id="ease-val">0.40s</span></div>
+        <input type="range" min="100" max="800" value="400" step="50" oninput="updateEase(this.value)">
+      </div>
+    </div>
+  </div>
+
+  <!-- STATUS BAR — Shows live state for both headlights and active mode -->
+  <div class="status-bar">
+    <div class="status-item"><div class="status-indicator online"></div><span>System</span></div>
+    <div class="status-item"><span>Venstre:</span><span class="status-val" id="stat-left">LUKKET &#8226; FRA</span></div>
+    <div class="status-item"><span>Hoejre:</span><span class="status-val" id="stat-right">LUKKET &#8226; FRA</span></div>
+    <div class="status-item"><span>Mode:</span><span class="status-val" id="stat-mode">STANDBY</span></div>
+    <div class="status-item" style="margin-left:auto"><span style="font-size:10px;color:#333">MX-5 NA // CTRL v1.0</span></div>
+  </div>
+
+</div>
+
+<!-- ============================================================
+     SLEEPY EYES CONFIGURATION MODAL
+     Set the dominant side and opening angle for each headlight
+============================================================ -->
+<div class="modal-overlay" id="sleepy-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <div>
+        <div class="modal-title">&#128564; Sleepy Eyes</div>
+        <div class="modal-subtitle">Konfigurer aabningsvinkel og dominant side</div>
+      </div>
+      <button class="modal-close" onclick="closeSleepyModal()">&#x2715; Luk</button>
+    </div>
+    <div class="modal-body">
+      <!-- Mini car preview with live updates as sliders are adjusted -->
+      <div class="modal-preview">
+        <div class="mini-car">
+          <div class="mini-hl left-hl" id="modal-hl-left"><div class="mini-hl-body"><div class="mini-hl-inner"></div></div></div>
+          <div class="mini-hl right-hl" id="modal-hl-right"><div class="mini-hl-body"><div class="mini-hl-inner"></div></div></div>
+          <svg width="220" height="80" viewBox="0 0 220 80" style="position:absolute;top:40px;left:0" fill="none">
+            <path d="M10 70 L10 42 L34 28 L186 28 L210 42 L210 70 Z" fill="#111116" stroke="#1e1e2a" stroke-width="1"/>
+            <rect x="68" y="38" width="84" height="22" rx="2" fill="#0a0a0c" stroke="#222" stroke-width="1"/>
+            <line x1="90" y1="38" x2="90" y2="60" stroke="#1a1a1a" stroke-width="1"/>
+            <line x1="110" y1="38" x2="110" y2="60" stroke="#1a1a1a" stroke-width="1"/>
+            <line x1="130" y1="38" x2="130" y2="60" stroke="#1a1a1a" stroke-width="1"/>
+            <rect x="34" y="62" width="152" height="6" rx="1" fill="#0d0d0d" stroke="#1a1a1a"/>
+            <circle cx="110" cy="50" r="7" fill="#111" stroke="#2a2a2a"/>
+          </svg>
+        </div>
+      </div>
+
+      <!-- Choose which side is "dominant" (the more open one) -->
+      <div class="modal-section-label">Dominant side</div>
+      <div class="dominant-selector">
+        <button class="dom-btn active" id="dom-left"  onclick="setDominant('left')"><span class="dom-icon">&#9664;</span>Venstre</button>
+        <button class="dom-btn"        id="dom-right" onclick="setDominant('right')"><span class="dom-icon">&#9654;</span>Hoejre</button>
+      </div>
+
+      <!-- Individual angle sliders for left and right headlights -->
+      <div class="modal-section-label">Aabningsvinkel</div>
+      <div class="eye-slider-row">
+        <div class="eye-side-label">VENSTRE<span id="lbl-left-dom">DOMINANT</span></div>
+        <div class="eye-slider-wrap"><input type="range" class="eye-range full" id="slider-left-eye" min="0" max="100" value="100" oninput="updateEyeSlider('left',this.value)"></div>
+        <div class="eye-pct" id="pct-left">100%</div>
+      </div>
+      <div class="eye-slider-row">
+        <div class="eye-side-label">HOEJRE<span id="lbl-right-dom"></span></div>
+        <div class="eye-slider-wrap"><input type="range" class="eye-range half" id="slider-right-eye" min="0" max="100" value="25" oninput="updateEyeSlider('right',this.value)"></div>
+        <div class="eye-pct" id="pct-right">25%</div>
+      </div>
+
+      <!-- Apply configuration and activate Sleepy Eyes mode -->
+      <button class="modal-apply" onclick="applySleepyAndClose()">&#8629; Anvend &amp; Aktiver</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  // ============================================================
+  // GLOBAL STATE OBJECT
+  // Tracks the current status of both headlights, the active
+  // animation mode, speed, easing, and running timers
+  // ============================================================
+  const state = {
+    left:  { open: false, on: false }, // Left headlight: open/closed, light on/off
+    right: { open: false, on: false }, // Right headlight: open/closed, light on/off
+    mode:     null,   // Active animation mode ('blink-alt', 'wave', 'wink', 'sleepy', null)
+    speed:    500,    // Animation speed in milliseconds
+    ease:     400,    // CSS transition duration for the pop-up movement (ms)
+    interval: null,   // Reference to setInterval (used by blink-alt and wave)
+    _winkStop: null   // Callback to stop the wink animation (async loop)
+  };
+
+  // Configuration object for the Sleepy Eyes mode
+  const sleepyConfig = {
+    dominant: 'left', // Which side is more open
+    leftPct:  100,    // Opening percentage for the left headlight (0–100%)
+    rightPct: 25      // Opening percentage for the right headlight (0–100%)
+  };
+
+  // ============================================================
+  // WEB SERIAL API — Communication with the ESP32 over USB
+  // ============================================================
+  let serialPort     = null;  // Active Serial port object
+  let serialWriter   = null;  // WritableStream writer for sending data
+  let serialReader   = null;  // ReadableStream reader for receiving data
+  let btConnected    = false; // Boolean: are we currently connected?
+  let readLoopActive = false; // Controls the lifetime of the read loop
+  let txFlashTimeout = null;  // Timeout handle for the TX indicator flash
+
+  // Check whether the Web Serial API is available (requires Chrome or Edge)
+  const hasSerial = 'serial' in navigator;
+
+  // Update the connection UI based on status ('connected', 'connecting', 'error', 'idle')
+  function setBtUI(s) {
+    const dot  = document.getElementById('bt-dot');
+    const text = document.getElementById('bt-text');
+    const conn = document.getElementById('bt-connect-btn');
+    const disc = document.getElementById('bt-disconnect-btn');
+    const name = document.getElementById('bt-device-name');
+
+    dot.className = 'bt-status-dot ' + s;
+
+    if (s === 'connected') {
+      text.textContent = 'FORBUNDET';
+      text.className = 'bt-status-text connected';
+      conn.style.display = 'none';
+      disc.style.display = '';
+      name.style.display = '';
+      name.textContent = 'MX5-CTRL';
+    } else if (s === 'connecting') {
+      text.textContent = 'FORBINDER...';
+      text.className = 'bt-status-text';
+      conn.style.display = 'none';
+      disc.style.display = 'none';
+    } else if (s === 'error') {
+      text.textContent = 'FORBINDELSESFEJL';
+      text.className = 'bt-status-text error';
+      conn.style.display = '';
+      disc.style.display = 'none';
+      name.style.display = 'none';
+    } else {
+      // 'idle' – not connected
+      text.textContent = 'IKKE FORBUNDET';
+      text.className = 'bt-status-text';
+      conn.style.display = '';
+      disc.style.display = 'none';
+      name.style.display = 'none';
+    }
+  }
+
+  // Open a Web Serial connection to the ESP32 (CP2102, 115200 baud)
+  async function btConnect() {
+    if (!hasSerial) {
+      // Web Serial not supported – show warning
+      const w = document.getElementById('no-bt-warn');
+      w.style.display = 'block';
+      w.textContent = '⚠ Web Serial API requires Chrome/Edge. Connect the ESP32 via USB and click Connect.';
+      return;
+    }
+    try {
+      setBtUI('connecting');
+      // User selects the port from the browser dialog
+      serialPort = await navigator.serial.requestPort();
+      await serialPort.open({ baudRate: 115200 });
+      serialWriter = serialPort.writable.getWriter();
+      btConnected = true;
+      setBtUI('connected');
+      startReadLoop(); // Start listening for incoming data
+      await sendCmd('PING'); // Test the connection
+    } catch (e) {
+      // NotFoundError = user cancelled the dialog
+      setBtUI(e.name === 'NotFoundError' ? 'idle' : 'error');
+    }
+  }
+
+  // Close the Serial connection and clean up streams
+  async function btDisconnect() {
+    readLoopActive = false;
+    btConnected = false;
+    try { if (serialWriter) { serialWriter.releaseLock(); serialWriter = null; } } catch(e) {}
+    try { if (serialReader) { serialReader.cancel(); serialReader = null; } } catch(e) {}
+    try { if (serialPort)   { await serialPort.close(); serialPort = null; } } catch(e) {}
+    setBtUI('idle');
+    document.getElementById('stat-mode').textContent = 'AFBRUDT';
+  }
+
+  // Send a text command to the ESP32 (newline-terminated)
+  async function sendCmd(cmd) {
+    if (!btConnected || !serialWriter) return;
+    try {
+      await serialWriter.write(new TextEncoder().encode(cmd + '\n'));
+      flashTX(); // Show TX activity
+    } catch(e) {}
+  }
+
+  // Flash the TX indicator for 120ms on data transmission
+  function flashTX() {
+    const el = document.getElementById('bt-tx');
+    el.textContent = 'TX ◉';
+    el.classList.add('flash');
+    clearTimeout(txFlashTimeout);
+    txFlashTimeout = setTimeout(() => {
+      el.textContent = 'TX ○';
+      el.classList.remove('flash');
+    }, 120);
+  }
+
+  // Background loop that listens for incoming data from the ESP32
+  // Responds to 'PONG' replies from the PING command
+  async function startReadLoop() {
+    readLoopActive = true;
+    try {
+      serialReader = serialPort.readable.getReader();
+      let buf = '';
+      while (readLoopActive) {
+        const { value, done } = await serialReader.read();
+        if (done) break;
+        buf += new TextDecoder().decode(value);
+        // Process the buffer line by line
+        let nl;
+        while ((nl = buf.indexOf('\n')) !== -1) {
+          const line = buf.substring(0, nl).trim();
+          buf = buf.substring(nl + 1);
+          if (line === 'PONG') {
+            document.getElementById('bt-text').textContent = 'FORBUNDET — MX5-CTRL ONLINE';
+          }
+        }
+      }
+    } catch(e) {
+      if (readLoopActive) setBtUI('error');
+    } finally {
+      try { serialReader.releaseLock(); } catch(e) {}
+    }
+  }
+
+  // ============================================================
+  // UTILITY FUNCTIONS
+  // ============================================================
+
+  // Promise-based delay helper (used in async animations)
+  const delay = ms => new Promise(r => setTimeout(r, ms));
+
+  // Convert an opening percentage (0–100%) to a rotation angle in degrees
+  // 0% = 85° (fully closed), 100% = 0° (fully open)
+  const pctToAngle = pct => 85 - (pct / 100) * 85;
+
+  // ============================================================
+  // STATE APPLICATION — Update the UI to match the state object
+  // ============================================================
+  function applyState() {
+    ['left', 'right'].forEach(side => {
+      const el = document.getElementById('hl-' + side);
+
+      // Apply the current easing value to the CSS transition
+      el.style.transition = `transform ${state.ease / 1000}s cubic-bezier(0.34,1.56,0.64,1)`;
+
+      if (state.mode === 'sleepy') {
+        // Sleepy Eyes: use a percentage-based opening angle instead of open/closed classes
+        const pct = side === 'left' ? sleepyConfig.leftPct : sleepyConfig.rightPct;
+        el.className = 'headlight ' + side + ' on'; // Light is always on in sleepy mode
+        el.style.transform = `rotateX(${pctToAngle(pct)}deg)`;
+        el.style.transformOrigin = 'bottom center';
+      } else {
+        // Normal mode: use CSS classes for open/closed and on/off
+        el.style.transform = '';
+        el.className = 'headlight ' + side;
+        if (state[side].open) el.classList.add('open'); else el.classList.add('closed');
+        if (state[side].on)   el.classList.add('on');
+      }
+
+      // Update the individual toggle buttons (open/close)
+      const ob = document.getElementById('ind-' + side + '-open');
+      const lb = document.getElementById('ind-' + side + '-light');
+      if (ob) {
+        ob.className = 'btn-sm' + (state[side].open ? ' active-green' : '');
+        ob.textContent = state[side].open ? '▼ Luk' : '▲ Åben';
+      }
+      if (lb) lb.className = 'btn-sm' + (state[side].on ? ' active-green' : '');
+    });
+
+    // Show or hide the ground glow depending on whether any light is on
+    const anyOn = state.left.on || state.right.on || state.mode === 'sleepy';
+    document.getElementById('ground-glow').style.background = anyOn
+      ? 'radial-gradient(ellipse,rgba(255,184,0,0.12) 0%,transparent 70%)'
+      : 'radial-gradient(ellipse,rgba(255,184,0,0.0) 0%,transparent 70%)';
+
+    // Update status bar text for both sides
+    const s = side => {
+      if (state.mode === 'sleepy') {
+        const pct = side === 'left' ? sleepyConfig.leftPct : sleepyConfig.rightPct;
+        return `${pct}% AABEN • TIL`;
+      }
+      return (state[side].open ? 'AABEN' : 'LUKKET') + ' • ' + (state[side].on ? 'TIL' : 'FRA');
+    };
+    document.getElementById('stat-left').textContent  = s('left');
+    document.getElementById('stat-right').textContent = s('right');
+  }
+
+  // ============================================================
+  // QUICK CONTROL — Set both headlights to the same state
+  // ============================================================
+  function setAll(action) {
+    stopMode(); // Stop any running animation first
+    if (action === 'open')  { state.left.open = true;  state.right.open = true; }
+    if (action === 'close') { state.left.open = false; state.right.open = false; }
+    if (action === 'on')    { state.left.on = true;    state.right.on = true; }
+    if (action === 'off')   { state.left.on = false;   state.right.on = false; }
+    applyState();
+    // Send commands to the ESP32
+    if (action === 'open')  { sendCmd('L:OPEN');  sendCmd('R:OPEN'); }
+    if (action === 'close') { sendCmd('L:CLOSE'); sendCmd('R:CLOSE'); }
+    if (action === 'on')    { sendCmd('L:ON');    sendCmd('R:ON'); }
+    if (action === 'off')   { sendCmd('L:OFF');   sendCmd('R:OFF'); }
+  }
+
+  // Toggle open/closed for a single headlight
+  function toggleOpen(side) {
+    state[side].open = !state[side].open;
+    applyState();
+    sendCmd(`${side === 'left' ? 'L' : 'R'}:${state[side].open ? 'OPEN' : 'CLOSE'}`);
+  }
+
+  // Toggle light on/off for a single headlight
+  function toggleLight(side) {
+    state[side].on = !state[side].on;
+    applyState();
+    sendCmd(`${side === 'left' ? 'L' : 'R'}:${state[side].on ? 'ON' : 'OFF'}`);
+  }
+
+  // ============================================================
+  // STOP ANIMATION — Reset everything to standby
+  // ============================================================
+  function stopMode() {
+    // Stop the wink async loop
+    if (state._winkStop) { state._winkStop(); state._winkStop = null; }
+    // Stop interval-based animations
+    if (state.interval) { clearInterval(state.interval); state.interval = null; }
+
+    state.mode = null;
+    document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+    document.getElementById('stat-mode').textContent = btConnected ? 'FORBUNDET' : 'STANDBY';
+
+    // Reset CSS transform on both headlights
+    ['left', 'right'].forEach(side => {
+      document.getElementById('hl-' + side).style.transform = '';
+    });
+
+    // Reset the state object
+    state.left.open = false; state.left.on = false;
+    state.right.open = false; state.right.on = false;
+    applyState();
+
+    // Send stop commands to the ESP32
+    sendCmd('MODE:STOP');
+    sendCmd('L:CLOSE'); sendCmd('R:CLOSE');
+    sendCmd('L:OFF');   sendCmd('R:OFF');
+  }
+
+  // ============================================================
+  // SLEEPY EYES MODE
+  // Headlights open to a fixed percentage (half-open / droopy look)
+  // ============================================================
+  function activateSleepyEyes() {
+    stopMode();
+    state.mode = 'sleepy';
+    document.getElementById('mode-sleepy').classList.add('active');
+    document.getElementById('stat-mode').textContent = 'SLEEPY EYES';
+    applyState();
+    // Send the configuration to the ESP32 with the opening percentage for both sides
+    sendCmd(`MODE:SLEEPY:${sleepyConfig.leftPct}:${sleepyConfig.rightPct}`);
+  }
+
+  // ============================================================
+  // ANIMATION MODES
+  // ============================================================
+  function setMode(mode) {
+    stopMode();
+    state.mode = mode;
+    const btn = document.getElementById('mode-' + mode);
+    if (btn) btn.classList.add('active');
+    document.getElementById('stat-mode').textContent = mode.toUpperCase();
+
+    // Send mode command to the ESP32 with speed value
+    const modeMap = { 'blink-alt': 'BLINK_ALT', 'wave': 'WAVE', 'wink': 'WINK' };
+    if (modeMap[mode]) sendCmd(`MODE:${modeMap[mode]}:${state.speed}`);
+
+    // --- BLINK-ALT: Left and right take turns, 2 cycles each, then stops ---
+    if (mode === 'blink-alt') {
+      let t = 0;
+      state.interval = setInterval(() => {
+        const a = t % 2 === 0; // Determines which side is currently active
+        state.left.open  = a;  state.left.on  = a;
+        state.right.open = !a; state.right.on = !a;
+        applyState();
+        t++;
+        if (t >= 4) {
+          // 4 steps = 2 full blinks, then stop
+          clearInterval(state.interval);
+          state.interval = null;
+          state.mode = null;
+          document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+          document.getElementById('stat-mode').textContent = btConnected ? 'FORBUNDET' : 'STANDBY';
+          // Close both headlights after a short delay
+          setTimeout(() => {
+            state.left.open = false; state.left.on = false;
+            state.right.open = false; state.right.on = false;
+            applyState();
+            sendCmd('L:CLOSE'); sendCmd('R:CLOSE');
+            sendCmd('L:OFF');   sendCmd('R:OFF');
+          }, state.speed);
+        }
+      }, state.speed);
+
+    // --- WAVE: Overlapping open/close loop – right joins when left is 1/3 into movement ---
+    } else if (mode === 'wave') {
+      state.left.open = false; state.left.on = false;
+      state.right.open = false; state.right.on = false;
+      applyState();
+
+      let waveRunning = true;
+      state._winkStop = () => { waveRunning = false; };
+
+      // Overlap delay = 1/3 of easing duration, so right starts when left is 1/3 of the way up
+      const overlapDelay = Math.round(state.ease / 3);
+
+      async function runWave() {
+        while (waveRunning && state.mode === 'wave') {
+          // --- OPENING: left starts, right joins after 1/3 of the easing time ---
+          state.left.open = true; state.left.on = true;
+          applyState();
+          await delay(overlapDelay);
+          if (!waveRunning || state.mode !== 'wave') return;
+          state.right.open = true; state.right.on = true;
+          applyState();
+
+          // Hold fully open for one speed interval
+          await delay(state.ease - overlapDelay + state.speed);
+          if (!waveRunning || state.mode !== 'wave') return;
+
+          // --- CLOSING: left starts, right joins after 1/3 of the easing time ---
+          state.left.open = false; state.left.on = false;
+          applyState();
+          await delay(overlapDelay);
+          if (!waveRunning || state.mode !== 'wave') return;
+          state.right.open = false; state.right.on = false;
+          applyState();
+
+          // Wait for both to fully close before next cycle
+          await delay(state.ease - overlapDelay + state.speed);
+          if (!waveRunning || state.mode !== 'wave') return;
+        }
+      }
+      runWave();
+      state.interval = null; // Uses async loop, not setInterval
+
+    // --- WINK: Overlapping wave – right starts opening when left is 1/3 up,
+    //     and right starts closing when left is 1/3 into closing ---
+    } else if (mode === 'wink') {
+      state.left.open = false; state.left.on = false;
+      state.right.open = false; state.right.on = false;
+      applyState();
+
+      let winkRunning = true;
+      state._winkStop = () => { winkRunning = false; }; // Stop callback
+
+      // Overlap delay = 1/3 of the easing duration so it feels like 1/3 of the way up
+      const overlapDelay = Math.round(state.ease / 3);
+
+      async function runWink() {
+        while (winkRunning && state.mode === 'wink') {
+          if (!winkRunning || state.mode !== 'wink') return;
+
+          // --- OPENING: left starts, right joins after 1/3 of the easing time ---
+          state.left.open = true; state.left.on = true;
+          applyState();
+          await delay(overlapDelay);
+          if (!winkRunning || state.mode !== 'wink') return;
+          state.right.open = true; state.right.on = true;
+          applyState();
+
+          // Wait for both to be fully open (remaining easing + small hold)
+          await delay(state.ease - overlapDelay + state.speed);
+          if (!winkRunning || state.mode !== 'wink') return;
+
+          // --- CLOSING: left starts, right joins after 1/3 of the easing time ---
+          state.left.open = false; state.left.on = false;
+          applyState();
+          await delay(overlapDelay);
+          if (!winkRunning || state.mode !== 'wink') return;
+          state.right.open = false; state.right.on = false;
+          applyState();
+
+          // Wait for both to be fully closed before next cycle
+          await delay(state.ease - overlapDelay);
+          if (!winkRunning || state.mode !== 'wink') return;
+
+          // Random pause of 1–5× the speed value between each wink
+          await delay(state.speed * (1 + Math.random() * 4));
+        }
+      }
+      runWink();
+      state.interval = null; // No setInterval here – uses an async loop instead
+    }
+  }
+
+  // ============================================================
+  // SETTINGS — Speed and easing
+  // ============================================================
+
+  // Update animation speed and restart the active mode if necessary
+  function updateSpeed(val) {
+    state.speed = parseInt(val);
+    document.getElementById('speed-val').textContent = val + 'ms';
+    // Restart interval-based modes with the new speed (not sleepy or wink)
+    if (state.mode && state.mode !== 'sleepy' && state.mode !== 'wink') {
+      const m = state.mode;
+      setMode(m);
+    }
+  }
+
+  // Update the CSS transition duration (easing) for the pop-up animation
+  function updateEase(val) {
+    state.ease = parseInt(val);
+    document.getElementById('ease-val').textContent = (val / 1000).toFixed(2) + 's';
+    applyState();
+  }
+
+  // ============================================================
+  // SLEEPY EYES MODAL — Open, close and configure
+  // ============================================================
+
+  // Open the modal and sync sliders with the current configuration
+  function openSleepyModal() {
+    syncModalSliders();
+    updateModalPreview();
+    document.getElementById('sleepy-modal').classList.add('visible');
+  }
+
+  // Close the modal
+  function closeSleepyModal() {
+    document.getElementById('sleepy-modal').classList.remove('visible');
+  }
+
+  // Close the modal when clicking on the overlay (outside the modal box)
+  document.getElementById('sleepy-modal').addEventListener('click', function(e) {
+    if (e.target === this) closeSleepyModal();
+  });
+
+  // Sync the modal sliders to match the current sleepyConfig values
+  function syncModalSliders() {
+    document.getElementById('slider-left-eye').value  = sleepyConfig.leftPct;
+    document.getElementById('slider-right-eye').value = sleepyConfig.rightPct;
+    document.getElementById('pct-left').textContent   = sleepyConfig.leftPct  + '%';
+    document.getElementById('pct-right').textContent  = sleepyConfig.rightPct + '%';
+    highlightDominantBtn();
+  }
+
+  // Set the dominant side and update the configuration accordingly
+  function setDominant(side) {
+    sleepyConfig.dominant = side;
+    if (side === 'left') {
+      sleepyConfig.leftPct = 100;
+      // Prevent the right side also being at 100% when left is dominant
+      if (sleepyConfig.rightPct >= 100) sleepyConfig.rightPct = 25;
+    } else {
+      sleepyConfig.rightPct = 100;
+      if (sleepyConfig.leftPct >= 100) sleepyConfig.leftPct = 25;
+    }
+    syncModalSliders();
+    updateModalPreview();
+    // Live update if Sleepy Eyes mode is already active
+    if (state.mode === 'sleepy') {
+      applyState();
+      sendCmd(`MODE:SLEEPY:${sleepyConfig.leftPct}:${sleepyConfig.rightPct}`);
+    }
+  }
+
+  // Update the visual styling of the dominant buttons and sliders
+  function highlightDominantBtn() {
+    document.getElementById('dom-left').className  = 'dom-btn' + (sleepyConfig.dominant === 'left'  ? ' active' : '');
+    document.getElementById('dom-right').className = 'dom-btn' + (sleepyConfig.dominant === 'right' ? ' active' : '');
+    document.getElementById('lbl-left-dom').textContent  = sleepyConfig.dominant === 'left'  ? 'DOMINANT' : '';
+    document.getElementById('lbl-right-dom').textContent = sleepyConfig.dominant === 'right' ? 'DOMINANT' : '';
+    // Slider track: full amber = dominant, semi-transparent = non-dominant
+    document.getElementById('slider-left-eye').className  = 'eye-range ' + (sleepyConfig.dominant === 'left'  ? 'full' : 'half');
+    document.getElementById('slider-right-eye').className = 'eye-range ' + (sleepyConfig.dominant === 'right' ? 'full' : 'half');
+  }
+
+  // Handle slider input for the opening angle
+  function updateEyeSlider(side, val) {
+    val = parseInt(val);
+    if (side === 'left') {
+      sleepyConfig.leftPct = val;
+      document.getElementById('pct-left').textContent = val + '%';
+    } else {
+      sleepyConfig.rightPct = val;
+      document.getElementById('pct-right').textContent = val + '%';
+    }
+    updateModalPreview();
+    // Live update if Sleepy Eyes mode is already active
+    if (state.mode === 'sleepy') {
+      applyState();
+      sendCmd(`MODE:SLEEPY:${sleepyConfig.leftPct}:${sleepyConfig.rightPct}`);
+    }
+  }
+
+  // Update the mini car preview in the modal with the current angle configuration
+  function updateModalPreview() {
+    ['left', 'right'].forEach(side => {
+      const el  = document.getElementById('modal-hl-' + side);
+      const pct = side === 'left' ? sleepyConfig.leftPct : sleepyConfig.rightPct;
+      el.style.transform       = `rotateX(${pctToAngle(pct)}deg)`;
+      el.style.transformOrigin = 'bottom center';
+      el.style.transition      = 'transform 0.3s ease';
+    });
+  }
+
+  // Apply the configuration and activate Sleepy Eyes mode
+  function applySleepyAndClose() {
+    closeSleepyModal();
+    activateSleepyEyes();
+  }
+
+  // ============================================================
+  // INITIALIZATION — Runs on page load
+  // ============================================================
+
+  // Show a warning if Web Serial is not supported by the browser
+  if (!hasSerial) {
+    const w = document.getElementById('no-bt-warn');
+    w.style.display = 'block';
+    w.textContent = '⚠ Web Serial API requires Chrome/Edge. Connect the ESP32 via USB (CP2102) and click Connect.';
+  }
+
+  // Set initial UI state
+  applyState();
+  updateModalPreview();
+</script>
+</body>
+</html>
